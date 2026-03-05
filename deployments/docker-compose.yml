@@ -1,0 +1,14 @@
+services:
+  ttyd:
+    image: tsl0922/ttyd:latest
+    container_name: ttyd
+    restart: unless-stopped
+    ports:
+      - "7681:7681"
+    command: >
+      ttyd -p 7681 -W
+      -t fontSize=14
+      -t 'theme={"background":"#1e1e1e","foreground":"#d4d4d4","cursor":"#d4d4d4"}'
+      bash
+    # tsl0922/ttyd supports ARM64 (Raspberry Pi) and AMD64
+    # -W  enables writable mode so the terminal accepts input

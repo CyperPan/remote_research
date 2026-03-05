@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+*.key
+*.pem
 *.local
 
 # OS
@@ -26,6 +28,11 @@ venv/
 dist/
 build/
 *.log
+
+# CrewAI runtime
+crewai-server/.venv/
+crewai-server/__pycache__/
+.crewai-server/
 
 # Agent skill files (local use only, not for VCS)
 *_skill.md

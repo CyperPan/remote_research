@@ -4,17 +4,18 @@
 
 ### 目标
 
-将 **Web 终端** 集成到网页中，实现 **「有浏览器的地方就能控制服务器」**。你无需在本地安装 SSH 客户端，只要有一台能上网的设备（手机、平板、任意电脑），打开浏览器即可登录到树莓派，再通过 SSH 跳转到你的 MacBook 或 GPU 服务器，在网页里完成所有终端操作。
+将 **Web 终端** 集成到网页中，实现 **「有浏览器的地方就能控制服务器」**。你无需在本地安装 SSH 客户端，只要有一台能上网的设备（手机、平板、任意电脑），打开浏览器即可登录到 Jetson Orin Nano，再通过 SSH 跳转到你的 MacBook 或 GPU 服务器，在网页里完成所有终端操作。
 
-### 与「手机 - 树莓派 - 电脑」架构的关系
+### 与「手机 - Jetson - 电脑」架构的关系
 
-本方案中，**树莓派** 充当 **堡垒机（Jump Server）**：
+本方案中，**Jetson Orin Nano** 充当 **堡垒机（Jump Server）**：
 
-- **24 小时在线、低功耗**：适合长期运行，作为统一入口。
-- **中转站**：手机只连树莓派，树莓派再通过 SSH 连接你的实验机（MacBook、GPU 服务器等）。
-- **集中管理**：密钥、访问控制都集中在树莓派上，目标机只需信任树莓派即可。
+- **常驻在线**：作为统一的外部访问入口。
+- **中转站**：手机只连 Jetson，Jetson 再通过 SSH 连接你的实验机（MacBook、GPU 服务器等）。
+- **集中管理**：密钥、访问控制都集中在 Jetson 上，目标机只需信任 Jetson 即可。
+- **本机亦可计算**：Jetson Orin Nano 自带 GPU，必要时也可作为轻量推理节点使用。
 
-因此，整体构成典型的 **堡垒机模式**：所有外部访问先到树莓派，再由树莓派转发到内网机器，既安全又便于在外网（如手机 4G）下使用。
+整体构成典型的 **堡垒机模式**：所有外部访问先到 Jetson，再由 Jetson 转发到内网机器，既安全又便于在外网（如手机 4G）下使用。
 
 ---
 
@@ -23,146 +24,120 @@
 ```mermaid
 flowchart LR
     subgraph client [客户端]
-        Phone[手机 / 平板 / 任意浏览器]
+        Phone["📱 手机 / 平板 / 任意浏览器"]
     end
-    subgraph bastion [堡垒机]
-        Pi[树莓派]
-        WebTerm[Web 终端 ttyd]
+    subgraph ztna ["零信任网络 — Tailscale"]
+        Jetson["🛡️ Jetson Orin Nano\n:7681 ttyd\n（应急终端）"]
+        Mac["🧠 MacBook / M4\n:7690 remotelab\n（Claude Code 对话界面）"]
     end
-    subgraph target [目标机]
-        Mac[MacBook / M4]
-        GPU[GPU 服务器]
+    subgraph compute [计算集群]
+        GPU["💪 GPU 服务器"]
     end
-    Phone -->|"HTTP(S) 访问"| WebTerm
-    WebTerm --> Pi
-    Pi -->|"SSH"| Mac
-    Pi -->|"SSH"| GPU
+    Phone  -->|"Tailscale WireGuard"| Jetson
+    Phone  -->|"Tailscale WireGuard"| Mac
+    Jetson -->|"SSH（仅密钥）"| Mac
+    Mac    -->|"SSH / paramiko"| GPU
 ```
+
+所有端口仅通过 Tailscale 可达，无需公网 IP 或开放防火墙端口。
 
 ### 角色说明
 
 | 角色 | 设备 | 职责 |
 |------|------|------|
-| **客户端** | 手机、平板、任意带浏览器的设备 | 通过浏览器打开树莓派上的 Web 终端页面，在网页里输入命令 |
-| **堡垒机** | 树莓派 | 运行 Web 终端服务（如 ttyd），将用户在网页中的指令通过 SSH 转发到目标机 |
-| **目标机** | MacBook、GPU 服务器等 | 接收来自树莓派的 SSH 连接，执行 CrewAI、MoE 等实验任务 |
+| **客户端** | 手机、平板、任意带浏览器的设备 | 通过浏览器打开 Web 终端页面，在网页里输入命令 |
+| **堡垒机** | Jetson Orin Nano（Ubuntu 22.04，aarch64） | 运行 ttyd（Docker 容器），将用户指令通过 SSH 转发到目标机 |
+| **目标机** | MacBook、GPU 服务器等 | 接收来自 Jetson 的 SSH 连接，执行 AI 实验任务 |
 
-**数据流**：浏览器 → 树莓派（Web 终端）→ 用户在网页里输入 `ssh user@电脑` → 树莓派发起 SSH 到电脑 → 电脑上的终端输出回显到网页。
+**数据流**：浏览器 → Jetson（Web 终端）→ 用户在网页里输入 `ssh macbook` → Jetson 发起 SSH 到电脑 → 电脑上的终端输出回显到网页。
 
 ---
 
 ## 3. 实现步骤
 
-### 步骤一：在树莓派上部署 Web 终端
+### 步骤一：在 Jetson 上部署 Web 终端
 
-推荐使用 **ttyd**：把本地终端映射到指定端口，用浏览器即可访问，稳定、易部署。
+Jetson Orin Nano 已预装 Docker 29 和 Docker Compose v2，直接用 docker compose 启动 ttyd 容器即可。无需手动安装 ttyd 或 Docker。
 
-#### 安装 ttyd（树莓派）
-
-**方式 A：包管理器（推荐）**
+#### 连接 Jetson
 
 ```bash
-# Debian / Raspberry Pi OS
-sudo apt update
-sudo apt install ttyd
+# 在 MacBook 上
+ssh jetson
 ```
 
-**方式 B：从源码安装**
+#### 运行安装脚本
 
-若系统源中版本过旧，可从 [ttyd 官方仓库](https://github.com/tsl0922/ttyd) 按文档编译安装。
-
-#### 运行 ttyd
-
-在树莓派上执行：
+在 Jetson 上，克隆本仓库并执行安装脚本：
 
 ```bash
-# 将终端映射到 7681 端口，使用 bash
-ttyd -p 7681 bash
+git clone <本仓库地址>
+cd remote_research
+bash scripts/install_gateway.sh
 ```
 
-如需后台常驻，可使用 `systemd` 或 `screen` / `tmux`：
+脚本会自动：
+1. 安装 Tailscale（Docker 已存在，跳过）
+2. 以 docker compose 启动 ttyd 容器（端口 7681，暗色主题，ARM64 镜像）
+
+#### 手动启动（不用脚本）
 
 ```bash
-# 使用 tmux 后台运行示例
-tmux new -s ttyd
-ttyd -p 7681 bash
-# Ctrl+B 然后 D 分离会话
+cd deployments
+docker compose up -d
 ```
 
 #### 从手机/电脑访问
 
-在同一局域网内，用浏览器打开：
+同一局域网内，浏览器打开：
 
 ```
-http://树莓派IP:7681
+http://Jetson局域网IP:7681
 ```
 
-例如树莓派 IP 为 `192.168.1.100`，则访问：`http://192.168.1.100:7681`。你会看到网页里出现一个终端，输入的命令在树莓派上执行。
+外网（配置 Tailscale 后）：
 
-**备选工具**：若需要文件管理可考虑 **Cloud Commander**；若后续自建 Web 终端服务，可参考本仓库的 remotelab 思路，在树莓派上运行自己的服务并反向代理到同一端口。
+```
+http://Jetson-Tailscale-IP:7681
+```
 
 ---
 
-### 步骤二：树莓派到电脑的无密码登录
+### 步骤二：Jetson 到电脑的无密码登录
 
-在网页终端里每次输入密码既麻烦又不安全。建议在树莓派上配置 **SSH 公钥**，实现树莓派 → 电脑的免密登录。
-
-#### 在树莓派上生成 SSH 密钥
+#### 在 Jetson 上生成 SSH 密钥
 
 ```bash
-# 建议使用 ED25519
-ssh-keygen -t ed25519 -C "pi@remotelab" -f ~/.ssh/id_ed25519 -N ""
+# 在 Jetson 上执行（或通过脚本）
+bash scripts/setup_ssh_trust.sh <user>@<macbook-ip>
 ```
 
-默认会生成 `~/.ssh/id_ed25519`（私钥）和 `~/.ssh/id_ed25519.pub`（公钥）。
+脚本会自动完成密钥生成、`ssh-copy-id`，并验证免密登录。
 
-#### 将公钥拷贝到目标电脑
-
-把树莓派的公钥写入目标机（MacBook 或 GPU 服务器）的 `~/.ssh/authorized_keys`：
+手动操作等价命令：
 
 ```bash
-# 在树莓派上执行，将 user 和 computer_ip 换成你的用户名与目标机 IP
-ssh-copy-id user@computer_ip
+ssh-keygen -t ed25519 -C "jetson@remotelab" -f ~/.ssh/id_ed25519 -N ""
+ssh-copy-id user@macbook-ip
 ```
-
-按提示输入目标机的一次性密码即可。
 
 #### 验证免密登录
 
-在树莓派终端执行：
-
 ```bash
-ssh user@computer_ip
+ssh user@macbook-ip
+# 无需输入密码即可登录说明配置成功
 ```
 
-若无需输入密码即可登录，说明配置成功。
+#### 配置 SSH config 方便记忆
 
-#### 在网页终端中的用法
-
-在手机浏览器打开的 ttyd 页面里，你实际上操作的是**树莓派的 shell**。因此只需输入：
-
-```bash
-ssh user@computer_ip
-```
-
-或若已在树莓派上配置 `~/.ssh/config` 的 Host（如 `macbook`）：
-
-```bash
-ssh macbook
-```
-
-即可「秒进」目标电脑的终端，在网页里继续执行 `crewai run` 等命令。
-
-**可选：配置 SSH config 方便记忆**
-
-在树莓派上编辑 `~/.ssh/config`：
+在 Jetson 上编辑 `~/.ssh/config`：
 
 ```
 Host macbook
-    HostName 192.168.1.50
+    HostName <macbook-tailscale-ip>
     User your_username
 Host gpu-server
-    HostName 192.168.1.60
+    HostName <gpu-tailscale-ip>
     User your_username
 ```
 
@@ -172,37 +147,31 @@ Host gpu-server
 
 ### 步骤三：手机远程访问（外网 / 非同一 Wi-Fi）
 
-当手机和树莓派不在同一 Wi-Fi（例如手机用 4G）时，需要解决 **内网穿透** 或 **虚拟组网**，让手机能访问到树莓派的 Web 终端端口。
+当手机和 Jetson 不在同一 Wi-Fi（例如手机用 4G）时，使用 **Tailscale** 组建虚拟局域网。
 
-#### 方案 A：Tailscale（推荐）
+#### 安装并认证 Tailscale（Jetson 上）
 
-Tailscale 会在手机、树莓派、电脑之间建立一个 **虚拟局域网**，每台设备获得一个固定 Tailscale IP，无需公网 IP 或端口映射。
+```bash
+# 安装（install_gateway.sh 已完成）
+sudo tailscale up
+# 按提示访问链接完成认证
+```
 
-1. **在树莓派上安装 Tailscale**  
-   参见 [Tailscale 官方文档](https://tailscale.com/download/linux)，按系统选择安装方式并登录同一账号。
+#### 获取 Jetson 的 Tailscale IP
 
-2. **在手机和电脑上安装 Tailscale**  
-   安装 App 或客户端，使用同一账号登录。
+```bash
+tailscale ip -4
+# 返回类似 100.x.x.x 的地址
+```
 
-3. **获取树莓派的 Tailscale IP**  
-   在树莓派上执行 `tailscale ip -4`，记下返回的 IP（如 `100.x.x.x`）。
+#### 手机访问
 
-4. **手机访问**  
-   手机浏览器打开：`http://100.x.x.x:7681`（将 `100.x.x.x` 换为树莓派 Tailscale IP）。  
-   这样无论手机在何处，只要 Tailscale 连通，即可访问 Web 终端。
+1. 手机安装 Tailscale App，用同一账号登录。
+2. 浏览器打开 `http://100.x.x.x:7681`（将 IP 换为 Jetson 的 Tailscale IP）。
 
-5. **从树莓派 SSH 到电脑**  
-   若电脑也安装了 Tailscale，可在树莓派的 `~/.ssh/config` 里用电脑的 Tailscale IP 或主机名作为 `HostName`，这样即使电脑在内网，树莓派也能通过 Tailscale 网络 SSH 过去。
+#### Jetson SSH 到电脑（跨 Tailscale）
 
-#### 方案 B：frp 或 cpolar（端口映射到公网）
-
-若不想用 Tailscale，可将树莓派的 7681 端口通过 **frp** 或 **cpolar** 映射到公网，手机通过公网地址访问。
-
-- **安全注意**：  
-  - 务必为 ttyd 或反向代理配置**认证**（如 Basic Auth、Token），避免未授权访问。  
-  - 建议再套一层 **HTTPS**（如用 Caddy/nginx 反向代理 + Let's Encrypt），防止流量被窃听。
-
-具体 frp/cpolar 的服务器端与客户端配置请参考各自官方文档，将树莓派上的 `localhost:7681` 映射到公网即可。
+若电脑也安装了 Tailscale，在 Jetson 的 `~/.ssh/config` 里用电脑的 Tailscale IP 作为 `HostName`，无论电脑在哪个网络都能 SSH 过去。
 
 ---
 
@@ -210,19 +179,18 @@ Tailscale 会在手机、树莓派、电脑之间建立一个 **虚拟局域网*
 
 配置完成后，典型使用流程如下：
 
-1. **手机浏览器** 打开 `http://树莓派IP:7681`（同一 Wi-Fi）或 `http://树莓派TailscaleIP:7681`（外网）。
-2. 进入 **网页终端**，输入：
+1. **手机浏览器** 打开 `http://Jetson-Tailscale-IP:7681`，进入 **Jetson 网页终端**。
+2. 输入：
    ```bash
    ssh macbook
    ```
-   （或 `ssh user@computer_ip`）进入 M4 MacBook（或目标机）。
-3. 在 **同一网页终端** 里直接运行：
-   ```bash
-   crewai run
-   ```
-   Gemini/Claude 在目标机上规划、写代码，终端输出实时显示在手机浏览器中；若流程中有确认步骤（如输入 `Y`），在手机上即可完成操作。
+   进入 M4 MacBook 的终端。
+3. 在同一网页终端里直接运行 AI 实验任务，终端输出实时显示在手机浏览器中。
 
-这样你就实现了：**手机 → 树莓派（堡垒机）→ 电脑（实验机）** 的完整链路，真正做到了「有浏览器的地方就能控制服务器」。
+或直接访问 MacBook 上的 Claude Code 对话界面：
+```
+http://MacBook-Tailscale-IP:7690
+```
 
 ---
 
@@ -230,25 +198,81 @@ Tailscale 会在手机、树莓派、电脑之间建立一个 **虚拟局域网*
 
 ### 常见问题
 
-- **无法访问 `http://树莓派IP:7681`**  
-  - 确认树莓派上 ttyd 已启动：`ps aux | grep ttyd`。  
-  - 确认树莓派防火墙放行 7681：`sudo ufw allow 7681`（若使用 ufw）。  
-  - 若用 Tailscale，确认手机与树莓派均在线且在同一 Tailscale 网络。
+- **无法访问 `http://Jetson-IP:7681`**
+  - 确认 ttyd 容器已运行：`docker compose ps`（在 `deployments/` 目录下）。
+  - 若用 Tailscale，确认手机与 Jetson 均在线且在同一 Tailscale 网络：`tailscale status`。
 
-- **SSH 仍要求输入密码**  
-  - 确认已用 `ssh-copy-id` 将树莓派公钥写入目标机的 `~/.ssh/authorized_keys`。  
+- **SSH 仍要求输入密码**
+  - 确认已用 `ssh-copy-id` 将 Jetson 公钥写入目标机的 `~/.ssh/authorized_keys`。
   - 确认目标机 `~/.ssh` 权限为 `700`，`authorized_keys` 为 `600`。
 
-- **Tailscale 下无法 SSH 到电脑**  
-  - 确认电脑已安装并登录 Tailscale，在树莓派上用 `ping 电脑TailscaleIP` 或 `tailscale status` 检查连通性。  
-  - SSH config 中 `HostName` 改为电脑的 Tailscale IP 或主机名。
+- **Tailscale 下无法 SSH 到电脑**
+  - 确认电脑已安装并登录 Tailscale，在 Jetson 上用 `tailscale status` 检查连通性。
+  - SSH config 中 `HostName` 改为电脑的 Tailscale IP。
 
 ### 安全建议
 
-- **不要将 ttyd 直接暴露到公网且无鉴权**。建议仅在内网或 Tailscale 网络使用；若必须经 frp/cpolar 暴露，请加认证并启用 HTTPS。
-- **树莓派与目标机** 保持系统与 SSH 服务更新，使用强密码或仅密钥登录，关闭不必要的端口。
-- **SSH 私钥** 仅保存在树莓派上，不要复制到手机或不可信环境。
+- **不要将 ttyd 直接暴露到公网且无鉴权**。建议仅在 Tailscale 网络使用。
+- **SSH 私钥** 仅保存在 Jetson 上，不要复制到手机或不可信环境。
+- 详细安全策略见 [SECURITY_POLICY.md](SECURITY_POLICY.md)。
 
 ---
 
-本指南覆盖从拓扑到部署、无密码 SSH、外网访问与日常使用流程。若你在此基础上自建 remotelab Web 终端服务，可将 ttyd 替换为自研服务，并保持「堡垒机 + 浏览器」的整体架构不变。
+## 步骤四：在 MacBook 上部署 Ninglo/remotelab 对话界面
+
+ttyd 提供应急终端，而 [Ninglo/remotelab](https://github.com/Ninglo/remotelab) 则在 Claude Code 之上提供完整的聊天界面，支持 WebSocket 流式输出和会话管理，是主要的交互入口。
+
+### 前置条件
+
+- Node.js >= 18（检查：`node --version`）
+- Anthropic API Key（在 [console.anthropic.com](https://console.anthropic.com) 获取）
+- MacBook 已通过 Tailscale 连入虚拟网络
+
+### 快速安装
+
+在 MacBook 上运行：
+
+```bash
+bash scripts/setup_macbook.sh
+```
+
+脚本会自动完成：
+1. 检测 Node.js 版本
+2. 将仓库克隆到 `~/remotelab-server`
+3. 执行 `npm install`
+4. 创建 `.env` 模板（如不存在）
+5. 安装 pm2（如未安装）
+
+### 配置 API Key
+
+```bash
+nano ~/remotelab-server/.env
+# 将 ANTHROPIC_API_KEY=your_api_key_here 改为实际值
+```
+
+### 启动并守护服务
+
+```bash
+cd ~/remotelab-server
+npm run setup                              # 首次运行交互式配置
+pm2 start npm --name remotelab -- run chat # 启动服务（端口 7690）
+pm2 save                                   # 持久化进程列表
+pm2 startup                                # 打印并执行开机自启命令
+```
+
+### 从手机访问
+
+```
+http://<macbook-tailscale-ip>:7690
+```
+
+### 完整访问路径
+
+| 场景 | 入口 | 用途 |
+|------|------|------|
+| 正常使用 | `http://<macbook-ts-ip>:7690` | Claude Code 对话界面（推荐） |
+| 应急访问 | `http://<jetson-ts-ip>:7681` | Jetson 原始终端（ttyd） |
+
+---
+
+本指南覆盖从拓扑到部署、无密码 SSH、外网访问、日常使用流程以及 Ninglo/remotelab 对话服务的完整部署步骤。安全配置与密钥管理请参阅 [SECURITY_POLICY.md](SECURITY_POLICY.md)。

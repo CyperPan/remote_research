@@ -1,0 +1,65 @@
+research_task:
+  description: >
+    Research the following topic in depth: {topic}
+
+    Produce a structured report covering:
+    1. Background and motivation
+    2. Key recent developments (papers, tools, benchmarks)
+    3. Major open challenges
+    4. A recommended approach or action plan
+
+    If code_required is true, include a technical specification for what code
+    needs to be written.
+  expected_output: >
+    A structured research report (Markdown) with sections: Background, Findings,
+    Challenges, Recommendations. If code_required=true, append a Technical Spec
+    section describing the code to implement.
+  agent: planner
+
+review_task:
+  description: >
+    Review the research report produced by the planner.
+    Evaluate: accuracy of findings, completeness, logical consistency,
+    and feasibility of the recommendations.
+    If a Technical Spec is present, review it for correctness and clarity.
+  expected_output: >
+    A concise review (Markdown) with: Overall assessment, list of specific issues
+    or gaps, and a clear verdict: APPROVED / NEEDS_REVISION with actionable suggestions.
+  agent: reviewer
+  context:
+    - research_task
+
+code_task:
+  description: >
+    Based on the research plan and reviewer feedback, implement the code described
+    in the Technical Spec (if present). Write production-quality Python code that:
+    - Is directly runnable (python3 script.py)
+    - Includes clear comments
+    - Handles errors gracefully
+    - Outputs results to stdout and/or a results file
+
+    If no code was required, output a brief summary: "No code required."
+  expected_output: >
+    Complete Python code as a fenced code block, or "No code required."
+    Include any setup instructions (pip install ...) as comments at the top.
+  agent: coder
+  context:
+    - research_task
+    - review_task
+
+execute_task:
+  description: >
+    Take the code produced by the coder and execute it on the HPC cluster.
+    Steps:
+    1. Write the code to ~/crewai-runs/{job_id}/run.py on the HPC via SSH
+    2. Run: python3 ~/crewai-runs/{job_id}/run.py
+    3. Capture and return all output
+
+    If execute_on_hpc is false or HPC is unavailable, skip execution and
+    report: "Execution skipped (HPC not configured)."
+  expected_output: >
+    Execution log with: return code, stdout, stderr (truncated to 2000 chars if long),
+    and a brief interpretation of the results.
+  agent: executor
+  context:
+    - code_task

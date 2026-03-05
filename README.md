@@ -1,36 +1,94 @@
 # remotelab
 
-将 Web 终端集成到网页中，实现 **「有浏览器的地方就能控制服务器」**。结合「手机 - 树莓派（堡垒机）- 电脑（实验机）」架构，构成典型的堡垒机（Jump Server）访问模式。
+Control your servers from any browser — phone, tablet, or laptop.
+Combines **Ninglo/remotelab** (Claude Code chat UI) with a Jetson Orin Nano bastion host and Tailscale zero-trust networking.
 
-## 架构概览
+## Architecture
 
-- **手机（客户端）**：通过浏览器访问树莓派上的 Web 终端。
-- **树莓派（堡垒机）**：运行 Web 终端服务（如 ttyd），将网页中的指令经 SSH 转发到目标机。
-- **电脑（目标机）**：接收来自树莓派的 SSH，执行 CrewAI、MoE 等实验任务。
+```mermaid
+flowchart LR
+    subgraph client [Client]
+        Phone["📱 Mobile Browser"]
+    end
+    subgraph ztna [Zero-Trust — Tailscale]
+        direction TB
+        Jetson["🛡️ Jetson Orin Nano\n:7681 ttyd\n(emergency terminal)"]
+        Mac["🧠 M4 MacBook\n:7690 remotelab\n(Claude Code chat UI)"]
+    end
+    subgraph compute [Compute]
+        GPU["💪 GPU Cluster"]
+    end
+
+    Phone -->|"Tailscale WireGuard"| Jetson
+    Phone -->|"Tailscale WireGuard"| Mac
+    Jetson -->|"SSH (key-only)"| Mac
+    Mac    -->|"SSH / paramiko"| GPU
+```
+
+All ports are accessible only via Tailscale — no public IP or open firewall rules required.
+
+## Quickstart
+
+### 1. Jetson Orin Nano — bastion + emergency terminal
+
+```bash
+# SSH into the Jetson, then run (Docker is pre-installed):
+ssh jetson
+bash scripts/install_gateway.sh
+```
+
+This installs Tailscale and starts a ttyd container on port 7681.
+
+### 2. Jetson — SSH trust to MacBook
+
+```bash
+# On the Jetson — replace with your MacBook's Tailscale IP or hostname
+bash scripts/setup_ssh_trust.sh alice@100.x.x.x
+```
+
+### 3. MacBook — Claude Code chat server
+
+```bash
+# On the MacBook
+bash scripts/setup_macbook.sh
+# Then edit ~/remotelab-server/.env to set ANTHROPIC_API_KEY
+cd ~/remotelab-server && npm run setup
+pm2 start npm --name remotelab -- run chat
+pm2 save && pm2 startup
+```
+
+Open `http://<macbook-tailscale-ip>:7690` on your phone to start chatting with Claude Code.
+
+## Prerequisites
+
+- Jetson Orin Nano (Ubuntu 22.04, Docker 29+ pre-installed, always-on)
+- MacBook or any machine with Node.js >= 18
+- GPU cluster (optional, reachable via SSH)
+- [Tailscale](https://tailscale.com) account (free tier works)
+- Anthropic API key — get one at [console.anthropic.com](https://console.anthropic.com)
+
+## Repository Structure
 
 ```
-手机浏览器 → 树莓派:端口(Web 终端) → SSH → MacBook / GPU 服务器
+deployments/
+  docker-compose.yml     # ttyd container (ARM64, dark theme, port 7681)
+scripts/
+  install_gateway.sh     # Jetson: Tailscale + ttyd (Docker pre-installed, idempotent)
+  setup_ssh_trust.sh     # Jetson: generate ed25519 key + ssh-copy-id to MacBook
+  setup_macbook.sh       # MacBook: clone remotelab, npm install, pm2 daemon
+tests/
+  test_scripts.sh        # bash -n syntax validation for all .sh files
+  test_docker.sh         # docker compose config validation
+docs/
+  DEVELOPMENT_GUIDE.md   # Full deployment walkthrough
+  SECURITY_POLICY.md     # ZTNA rules, SSH key lifecycle, Tailscale ACLs
 ```
 
-## 快速开始
+## Documentation
 
-1. 在树莓派上部署 Web 终端（推荐 [ttyd](https://github.com/tsl0922/ttyd)）：`ttyd -p 7681 bash`。
-2. 配置树莓派到目标机的 SSH 公钥免密登录：`ssh-copy-id user@computer_ip`。
-3. 手机与树莓派不在同一网络时，使用 [Tailscale](https://tailscale.com/) 组网，或使用 frp/cpolar 做端口映射。
-
-**详细部署步骤、命令说明、外网访问方案与故障排查，请参阅 [开发指南](docs/DEVELOPMENT_GUIDE.md)。**
-
-## 前置条件
-
-- 树莓派（已联网，建议 24 小时在线）
-- 目标机（MacBook、GPU 服务器等，支持 SSH）
-- 手机或任意带浏览器的设备
-- 外网访问（可选）：Tailscale 或 frp / cpolar
-
-## 文档
-
-- [开发指南](docs/DEVELOPMENT_GUIDE.md)：完整实现步骤、网络拓扑、安全与故障排查
+- [Development Guide](docs/DEVELOPMENT_GUIDE.md) — step-by-step deployment, network topology, troubleshooting
+- [Security Policy](docs/SECURITY_POLICY.md) — zero-trust principles, SSH key lifecycle, Tailscale ACL examples
 
 ## License
 
-本仓库以文档与方案为主，可按需使用与修改。
+Documentation and scripts — use and adapt freely.

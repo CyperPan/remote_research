@@ -26,3 +26,6 @@ venv/
 dist/
 build/
 *.log
+
+# Agent skill files (local use only, not for VCS)
+*_skill.md

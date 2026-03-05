@@ -123,3 +123,94 @@ def list_jobs(limit: int = 20):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# ── Single-agent endpoint ──────────────────────────────────────────────────
+
+VALID_AGENTS = ["planner", "reviewer", "coder", "executor"]
+
+
+class AgentKickoffRequest(BaseModel):
+    agent: str   # planner | reviewer | coder | executor
+    task: str    # the user's raw task/question
+    inputs: dict = {}
+
+
+def _run_agent_thread(job_id: str, agent_name: str, task: str, inputs: dict):
+    job_store.update_job(job_id, status="running")
+    try:
+        from research_crew.crew import run_single_agent
+        result = run_single_agent(agent_name, task, inputs)
+        job_store.update_job(job_id, status="done", result=result)
+        _notify_openclaw(job_id, f"agent:{agent_name}", result)
+    except Exception as exc:
+        job_store.update_job(job_id, status="failed", error=str(exc))
+        _notify_openclaw(job_id, f"agent:{agent_name}", f"FAILED: {exc}")
+
+
+@app.post("/agent/kickoff")
+def agent_kickoff(req: AgentKickoffRequest):
+    if req.agent not in VALID_AGENTS:
+        raise HTTPException(400, f"Unknown agent '{req.agent}'. Valid: {VALID_AGENTS}")
+    if not req.task.strip():
+        raise HTTPException(422, "Field 'task' must not be empty")
+
+    job_id = job_store.create_job(f"agent:{req.agent}", {"task": req.task, **req.inputs})
+    threading.Thread(
+        target=_run_agent_thread,
+        args=(job_id, req.agent, req.task, req.inputs),
+        daemon=True,
+    ).start()
+    return {"job_id": job_id, "status": "queued", "agent": req.agent}
+
+
+# ── Flow endpoint ──────────────────────────────────────────────────────────
+
+class FlowKickoffRequest(BaseModel):
+    topic: str
+
+
+def _run_flow_thread(job_id: str, topic: str):
+    job_store.update_job(job_id, status="running")
+    try:
+        from research_crew.flow import ResearchFlow
+        flow = ResearchFlow()
+        flow.kickoff(inputs={"topic": topic})
+        state = flow.state
+        summary = (
+            f"**Status:** {state.status}\n\n"
+            f"**Retries:** {state.retry_count}/{3}\n\n"
+            f"**Result:**\n{state.final_result}"
+        )
+        job_store.update_job(job_id, status="done", result=summary, state=state.model_dump())
+        _notify_openclaw(job_id, "flow:research", summary)
+    except Exception as exc:
+        job_store.update_job(job_id, status="failed", error=str(exc))
+        _notify_openclaw(job_id, "flow:research", f"FAILED: {exc}")
+
+
+@app.post("/flow/kickoff")
+def flow_kickoff(req: FlowKickoffRequest):
+    if not req.topic.strip():
+        raise HTTPException(422, "Field 'topic' must not be empty")
+    job_id = job_store.create_job("flow:research", {"topic": req.topic})
+    threading.Thread(target=_run_flow_thread, args=(job_id, req.topic), daemon=True).start()
+    return {"job_id": job_id, "status": "queued", "flow": "research"}
+
+
+# ── Flow state endpoint ────────────────────────────────────────────────────
+# Stores full LabState JSON in job["state"], queryable after job completes.
+
+@app.get("/flow/state/{job_id}")
+def flow_state(job_id: str):
+    """Return the full LabState for a flow job (plan, code, reviewer_feedback, etc.)"""
+    job = job_store.get_job(job_id)
+    if not job:
+        raise HTTPException(404, f"Job {job_id} not found")
+    if job.get("crew", "").startswith("flow:") is False:
+        raise HTTPException(400, f"Job {job_id} is not a flow job")
+    state = job.get("state")
+    if not state:
+        return {"job_id": job_id, "status": job["status"], "state": None,
+                "note": "State not available yet (job still running or was created before this feature)"}
+    return {"job_id": job_id, "status": job["status"], "state": state}

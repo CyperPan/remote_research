@@ -97,3 +97,79 @@ class ResearchCrew:
             process=Process.sequential,
             verbose=True,
         )
+
+
+# ── Single-agent runner (used by /agent/kickoff) ───────────────────────────
+
+def run_single_agent(agent_name: str, task_description: str, inputs: dict | None = None) -> str:
+    """Spin up a mini-crew with exactly one named agent and run it.
+
+    Args:
+        agent_name: one of 'planner', 'reviewer', 'coder', 'executor'
+        task_description: the user's raw task/question as a string
+        inputs: optional extra variables passed to kickoff
+
+    Returns:
+        The agent's response as a plain string.
+    """
+    _AGENTS = {
+        "planner": lambda: Agent(
+            role="Research Planner",
+            goal="Produce a thorough, well-structured research plan or analysis for the given task.",
+            backstory=(
+                "You are a senior HPC and deep-learning researcher. "
+                "You excel at breaking complex problems into clear steps and surfacing relevant literature."
+            ),
+            llm=_gemini("gemini/gemini-3.1-pro-preview"),
+            verbose=True,
+        ),
+        "reviewer": lambda: Agent(
+            role="Quality Reviewer",
+            goal="Review, critique, and improve the given content, code, or proposal. Flag issues clearly.",
+            backstory=(
+                "You are a meticulous technical reviewer with expertise in ML systems and HPC. "
+                "You provide concise, actionable feedback."
+            ),
+            llm=_openai("openai/gpt-5.3-chat-latest"),
+            verbose=True,
+        ),
+        "coder": lambda: Agent(
+            role="Python Engineer",
+            goal="Write clean, correct, production-ready Python (or CUDA/C++) code for the given task.",
+            backstory=(
+                "You are an expert Python/CUDA engineer specialising in HPC, LLM inference, and distributed systems. "
+                "You write code that is readable and immediately runnable."
+            ),
+            llm=_anthropic("anthropic/claude-opus-4-6"),
+            verbose=True,
+        ),
+        "executor": lambda: Agent(
+            role="HPC Executor",
+            goal="Execute commands or scripts on the HPC cluster via SSH and report results.",
+            backstory=(
+                "You are a systems engineer who runs jobs on HPC infrastructure. "
+                "You use the HPCSSHTool to connect, submit, and monitor work."
+            ),
+            llm=_anthropic("anthropic/claude-haiku-4-5"),
+            tools=[HPCSSHTool()],
+            verbose=True,
+        ),
+    }
+
+    if agent_name not in _AGENTS:
+        raise ValueError(f"Unknown agent {agent_name!r}. Valid: {sorted(_AGENTS)}")
+
+    agent = _AGENTS[agent_name]()
+    task = Task(
+        description=task_description,
+        expected_output="A detailed, well-structured response to the task.",
+        agent=agent,
+    )
+    mini_crew = Crew(
+        agents=[agent],
+        tasks=[task],
+        process=Process.sequential,
+        verbose=True,
+    )
+    result = mini_crew.kickoff(inputs=inputs or {})
+    return result.raw if hasattr(result, "raw") else str(result)

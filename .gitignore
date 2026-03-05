@@ -1,0 +1,28 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Dependencies (if project adds code later)
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build / output
+dist/
+build/
+*.log

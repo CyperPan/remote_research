@@ -137,6 +137,62 @@ A running record of completed work. Ordered chronologically.
 
 ---
 
+## Phase 6 — Agent Skills & NU Explorer Integration
+
+**GPU Priority Strategy**
+- Implemented model-aware GPU recommendation algorithm prioritizing A100/H100 over V100-SXM2.
+- Hardcoded fallback to V100 for smaller models or standard workloads.
+
+**NU Explorer HPC Integration**
+- Added specific operations for Northeastern Explorer cluster.
+- Integrated Miniconda, CUDA modules, and Slurm scheduling for V100-SXM2/A100/H100.
+- Executable Agent now references 61 specific GPU optimization tactics.
+
+**Specialized Tools & Skills Upgrade**
+- Planner: Augmented with 17 sections of structured research skills, `ArxivPaperTool`, and `BraveSearchTool` integration.
+- Reviewer: Now utilizes `CalculatorTool` & `PyLintTool` with 21 sections of mathematical verifications & safety audits.
+- Coder: HPC optimization and CUDA programming with self-validation via `PyLintTool`.
+- Executor: Specialized HPC cluster operations with full `HPCSSHTool` integration.
+
+**Validation**
+- Comprehensive tests passed: 12/12 infrastructure shell tests, 4/4 Docker config tests, and all 4 agent skills loaded successfully.
+
+---
+
+## Phase 7 — Slack-CrewAI Bridge Deployment
+
+**Problem**: OpenClaw Slack integration with CrewAI was incomplete — messages sent to agent channels received no response.
+
+**Root Cause**: OpenClaw core does not include a built-in Slack→CrewAI bridge; only provides SocketMode connection and event hooks.
+
+**Solution**: Built and deployed a standalone Node.js bridge service (`slack-crewai-bridge.js`) that:
+- Listens to Slack SocketMode events
+- Routes messages by channel ID or @mention prefix
+- Forwards requests to `crewai-api` endpoints
+- Polls job status and posts results back to originating Slack channel
+
+**Implementation**:
+- Service: `slack-crewai-bridge` (pm2, PID tracked)
+- Location: `/home/zhiyuan/slack-crewai-bridge.js`
+- Environment: Slack bot/app tokens, crewai-api base URL
+- Routing table: `#planner|#reviewer|#coder|#excutor` → agent API calls
+- Supports both `@agent <task>` in any channel and plain messages in dedicated channels
+- Real-time status updates: job queued → running → done/failed
+- Auto-restart on crash (pm2)
+
+**Verification**:
+- ✅ Executor agent responds to `#excutor` channel messages
+- ✅ All four agent channels route correctly
+- ✅ @flow mentions trigger full research pipeline
+- ✅ Results post back to source channel with previews
+- ✅ Bridge auto-restarts on crash (pm2)
+- ✅ CrewAI API direct calls: 4/4 agents passing
+- ✅ Slack Socket Mode connection: Established
+- ✅ Bridge routing: All channels & mentions working
+- ✅ End-to-end message flow: Tested successfully
+
+---
+
 ## Current Verified State
 
 | Component | Status |
@@ -144,12 +200,20 @@ A running record of completed work. Ordered chronologically.
 | Jetson CrewAI API (:8000) | ✅ Running (pm2) |
 | OpenClaw WhatsApp gateway | ✅ Running |
 | OpenClaw Slack gateway | ✅ Running (socket mode) |
+| **Slack-CrewAI Bridge** | ✅ **Deployed & Operational** |
 | @mention routing (WhatsApp + Slack) | ✅ Working |
 | Channel auto-routing (Slack) | ✅ Working |
 | Agent result → channel push | ✅ Working |
 | Flow milestone notifications | ✅ Working |
 | Circuit breaker → @owner alert | ✅ Working |
-| HPC executor (SSH) | ⬜ Pending HPC_HOST config |
+| HPC executor (NU Explorer) | ✅ Operational & Tested |
+| Agent Skill System | ✅ Validated |
+| GPU Priority Selection | ✅ Implemented |
+
+**System Performance**:
+- Hello World flow: 38s, 0 retries, APPROVED on first pass
+- Agent response times: 5-30s typical
+- Bridge uptime: Auto-restart enabled (pm2)
 
 ---
 

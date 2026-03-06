@@ -8,6 +8,11 @@ load_dotenv(Path(__file__).parent / ".env")
 
 import requests as _requests
 from fastapi import FastAPI, HTTPException
+
+# Slack notify helper (also used by flow.py)
+sys_path_research = str(Path(__file__).parent / "src" / "research_crew")
+if sys_path_research not in sys.path:
+    sys.path.insert(0, sys_path_research)
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -30,25 +35,14 @@ SLACK_GENERAL_CHANNEL = "C0AJW7E2GBU"   # #all-researchlab
 
 def _post_to_slack(channel_id: str, text: str, *, source_channel_id: str = "") -> None:
     """Post a message to a Slack channel via the bot token. Best-effort."""
-    token = os.getenv("SLACK_BOT_TOKEN", "")
-    if not token:
-        return
-    target = source_channel_id or channel_id
-    try:
-        _requests.post(
-            "https://slack.com/api/chat.postMessage",
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"channel": target, "text": text, "unfurl_links": False},
-            timeout=8,
-        )
-    except Exception:
-        pass  # notification is best-effort
+    from slack_notify import post
+    post(text, channel_id=source_channel_id or channel_id)
 
 
 def _mention_owner() -> str:
     """Return Slack @mention string for the human owner."""
-    uid = os.getenv("SLACK_OWNER_ID", "")
-    return f"<@{uid}>" if uid else "@owner"
+    from slack_notify import mention_owner
+    return mention_owner()
 
 
 # ── Available crews registry ───────────────────────────────────────────────
@@ -226,7 +220,7 @@ def _run_flow_thread(job_id: str, topic: str, source_channel_id: str = ""):
     try:
         from research_crew.flow import ResearchFlow
         flow = ResearchFlow()
-        flow.kickoff(inputs={"topic": topic})
+        flow.kickoff(inputs={"topic": topic, "source_channel_id": source_channel_id})
         state = flow.state
         summary = (
             f"**Status:** {state.status}\n\n"
